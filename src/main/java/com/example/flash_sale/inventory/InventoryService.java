@@ -111,31 +111,70 @@ public class InventoryService {
     }
 
     /**
-     * Decrement PG available_stock atomically per product line. Called within the order confirm tx.
-     * Throws INSUFFICIENT_STOCK if PG would go negative (this is rare for flash-sale items because
-     * Redis already gated them, but it's still the source of truth post-sale).
+     * Reserve non-flash-sale stock by decrementing PG available_stock under a row-level write lock.
+     * Called from inside the order-persistence tx so the order + payment + stock decrement are atomic.
+     * Throws INSUFFICIENT_STOCK if a concurrent checkout drained the row first.
      */
-    @Transactional
-    public void decrementPgStock(Map<Long, Integer> productIdToQty) {
+    public void reserveNormalStock(Map<Long, Integer> productIdToQty) {
         if (productIdToQty.isEmpty()) {
             return;
         }
-        List<Inventory> rows = inventoryRepository.findByProductIdIn(List.copyOf(productIdToQty.keySet()));
-        Map<Long, Inventory> byProduct = rows.stream()
-                .collect(java.util.stream.Collectors.toMap(Inventory::getProductId, r -> r));
+        Map<Long, Inventory> byProduct = lockRowsByProductIds(productIdToQty.keySet());
         for (Map.Entry<Long, Integer> e : productIdToQty.entrySet()) {
             Inventory inv = byProduct.get(e.getKey());
-            if (inv == null) {
-                throw new ApiException(ErrorCode.INVENTORY_NOT_FOUND,
-                        "Inventory not found", Map.of("productId", e.getKey()));
-            }
             int qty = e.getValue();
             if (qty > inv.getAvailableStock()) {
                 throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
-                        "Not enough stock in PG", Map.of("productId", e.getKey(), "requested", qty));
+                        "Not enough stock", Map.of("productId", e.getKey(),
+                                "requested", qty, "available", inv.getAvailableStock()));
             }
             inv.decrementAvailable(qty);
         }
+    }
+
+    /** Return non-flash-sale stock to PG. Called on order cancel for lines without a Redis reservation. */
+    @Transactional
+    public void restoreNormalStock(Map<Long, Integer> productIdToQty) {
+        if (productIdToQty.isEmpty()) {
+            return;
+        }
+        Map<Long, Inventory> byProduct = lockRowsByProductIds(productIdToQty.keySet());
+        for (Map.Entry<Long, Integer> e : productIdToQty.entrySet()) {
+            byProduct.get(e.getKey()).incrementAvailable(e.getValue());
+        }
+    }
+
+    /**
+     * Decrement PG available_stock for flash-sale lines at confirm time. Lines were gated by the
+     * Redis counter at checkout, so insufficient here means a serious drift between Redis and PG.
+     */
+    public void decrementPgStockForFlashSaleLines(Map<Long, Integer> productIdToQty) {
+        if (productIdToQty.isEmpty()) {
+            return;
+        }
+        Map<Long, Inventory> byProduct = lockRowsByProductIds(productIdToQty.keySet());
+        for (Map.Entry<Long, Integer> e : productIdToQty.entrySet()) {
+            Inventory inv = byProduct.get(e.getKey());
+            int qty = e.getValue();
+            if (qty > inv.getAvailableStock()) {
+                throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
+                        "Not enough PG stock at confirm", Map.of("productId", e.getKey(), "requested", qty));
+            }
+            inv.decrementAvailable(qty);
+        }
+    }
+
+    private Map<Long, Inventory> lockRowsByProductIds(java.util.Set<Long> productIds) {
+        List<Inventory> rows = inventoryRepository.findByProductIdIn(List.copyOf(productIds));
+        Map<Long, Inventory> byProduct = rows.stream()
+                .collect(java.util.stream.Collectors.toMap(Inventory::getProductId, r -> r));
+        for (Long id : productIds) {
+            if (!byProduct.containsKey(id)) {
+                throw new ApiException(ErrorCode.INVENTORY_NOT_FOUND,
+                        "Inventory not found", Map.of("productId", id));
+            }
+        }
+        return byProduct;
     }
 
     private Integer readFlashSaleRemaining(Long productId) {

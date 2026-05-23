@@ -54,4 +54,8 @@ public class Inventory {
         }
         this.availableStock -= qty;
     }
+
+    public void incrementAvailable(int qty) {
+        this.availableStock += qty;
+    }
 }

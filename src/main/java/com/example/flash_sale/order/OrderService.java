@@ -118,8 +118,8 @@ public class OrderService {
                     Map.of("status", order.getStatus().name()));
         }
         paymentService.markSuccess(orderId);
-        Map<Long, Integer> qtyByProduct = aggregateQty(order);
-        inventoryService.decrementPgStock(qtyByProduct);
+        // Only flash-sale lines need a PG decrement here — normal lines were decremented at checkout.
+        inventoryService.decrementPgStockForFlashSaleLines(qtyByProduct(order, true));
         for (OrderItem item : order.getItems()) {
             if (item.getReservationId() != null) {
                 inventoryService.commitReservation(item.getReservationId());
@@ -145,11 +145,13 @@ public class OrderService {
             paymentService.markFailed(orderId);
         } catch (ApiException ignored) {
         }
+        // Flash-sale lines: return stock to Redis. Normal lines: return stock to PG.
         for (OrderItem item : order.getItems()) {
             if (item.getReservationId() != null) {
                 inventoryService.releaseReservation(item.getReservationId(), item.getProductId(), item.getQuantity());
             }
         }
+        inventoryService.restoreNormalStock(qtyByProduct(order, false));
         order.markCancelled();
         return OrderDto.from(orderRepository.save(order));
     }
@@ -177,10 +179,13 @@ public class OrderService {
         return order;
     }
 
-    private Map<Long, Integer> aggregateQty(Order order) {
+    private Map<Long, Integer> qtyByProduct(Order order, boolean flashSaleLinesOnly) {
         Map<Long, Integer> map = new LinkedHashMap<>();
         for (OrderItem item : order.getItems()) {
-            map.merge(item.getProductId(), item.getQuantity(), Integer::sum);
+            boolean isFlashSale = item.getReservationId() != null;
+            if (flashSaleLinesOnly == isFlashSale) {
+                map.merge(item.getProductId(), item.getQuantity(), Integer::sum);
+            }
         }
         return map;
     }
