@@ -1,0 +1,6 @@
+package com.example.flash_sale.user;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+}
