@@ -85,6 +85,9 @@ public class OrderService {
         Map<Long, Product> productsById = loadProducts(cart.items());
         List<Reservation> reserved = new ArrayList<>();
         try {
+            // Presence of flashsale:stock:{productId} is the signal that a product is in an active
+            // sale — admin's loadFlashSaleStock is what creates that key. No key = treat as normal,
+            // gate via PG row lock inside the order-persist tx.
             for (CartItemDto item : cart.items()) {
                 if (inventoryService.hasFlashSaleStockKey(item.productId())) {
                     Reservation r = inventoryService.reserveFlashSale(userId, item.productId(), item.quantity());
@@ -96,6 +99,9 @@ public class OrderService {
             writeIdempotent(idemKey, dto);
             return dto;
         } catch (RuntimeException ex) {
+            // Reservations succeeded but the DB tx (or a later line) failed: hand the Redis stock back
+            // immediately rather than waiting for the 10-min TTL + sweeper. Swallow secondary errors
+            // because the original exception is what the user needs to see.
             for (Reservation r : reserved) {
                 try {
                     inventoryService.releaseReservation(r.reservationId(), r.productId(), r.quantity());
@@ -118,8 +124,12 @@ public class OrderService {
                     Map.of("status", order.getStatus().name()));
         }
         paymentService.markSuccess(orderId);
-        // Only flash-sale lines need a PG decrement here — normal lines were decremented at checkout.
+        // PG was deliberately not touched at checkout for flash-sale lines (the hot row would have
+        // serialised the whole sale on a row lock). Catch up now, inside the confirm tx, while the
+        // payment success makes this write meaningful.
         inventoryService.decrementPgStockForFlashSaleLines(qtyByProduct(order, true));
+        // Commit (not release) the Redis reservation: keys go away but the stock counter stays
+        // decremented because that quantity is now permanently sold.
         for (OrderItem item : order.getItems()) {
             if (item.getReservationId() != null) {
                 inventoryService.commitReservation(item.getReservationId());
@@ -179,6 +189,14 @@ public class OrderService {
         return order;
     }
 
+    /**
+     * Collapse order items into a productId → total-qty map, filtered by line type.
+     * A line is "flash-sale" iff reservation_id is non-null — that UUID is only set when checkout
+     * went through the Redis reserve path. The boolean argument is a selector, not a toggle:
+     *   true  → include only flash-sale lines (used by confirmPayment for the PG decrement)
+     *   false → include only normal lines    (used by cancel for the PG restore)
+     * The equality check (flashSaleLinesOnly == isFlashSale) is just "does this line match the filter".
+     */
     private Map<Long, Integer> qtyByProduct(Order order, boolean flashSaleLinesOnly) {
         Map<Long, Integer> map = new LinkedHashMap<>();
         for (OrderItem item : order.getItems()) {
@@ -205,7 +223,9 @@ public class OrderService {
         return map;
     }
 
-    // ----- Idempotency cache. Stores full response so a retry returns byte-identical output. -----
+    // Idempotency: store the full response, not just the orderId. A retrying client must see the
+    // same payload (same id, same totals, same items) without us re-running checkout — if we cached
+    // only the id we'd still have to re-query and might race a concurrent cancel/confirm.
 
     private static String idempotencyKeyOf(String requestId) {
         if (requestId == null || requestId.isBlank()) {

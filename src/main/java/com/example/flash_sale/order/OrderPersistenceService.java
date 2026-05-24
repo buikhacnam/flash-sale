@@ -41,6 +41,9 @@ public class OrderPersistenceService {
                                         CartDto cart,
                                         Map<Long, Product> productsById,
                                         List<Reservation> reservations) {
+        // Split the cart: flash-sale lines were already gated in Redis by the caller and arrive here
+        // as Reservation handles; everything else still needs a PG row lock + decrement, which we do
+        // inside this tx so the order + payment + stock change commit atomically.
         Map<Long, Reservation> byProduct = new HashMap<>();
         for (Reservation r : reservations) {
             byProduct.put(r.productId(), r);
@@ -52,6 +55,8 @@ public class OrderPersistenceService {
                 normalQty.merge(item.productId(), item.quantity(), Integer::sum);
             }
         }
+        // Called unconditionally — reserveNormalStock no-ops on an empty map, so an all-flash-sale
+        // cart skips the PG lock entirely. Cheaper than branching the control flow here.
         inventoryService.reserveNormalStock(normalQty);
 
         BigDecimal total = BigDecimal.ZERO;

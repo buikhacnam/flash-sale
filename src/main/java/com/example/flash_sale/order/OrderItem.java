@@ -30,7 +30,7 @@ public class OrderItem {
     private BigDecimal lineTotal;
 
     @Column(name = "reservation_id")
-    private UUID reservationId;
+private UUID reservationId;
 
     protected OrderItem() {
     }

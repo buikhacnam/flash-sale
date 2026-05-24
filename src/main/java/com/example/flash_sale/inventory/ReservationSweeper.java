@@ -42,7 +42,10 @@ public class ReservationSweeper {
             String key = InventoryService.reservationKey(UUID.fromString(reservationId));
             Map<Object, Object> hash = redis.opsForHash().entries(key);
             if (hash.isEmpty()) {
-                // Hash already gone (TTL'd or explicitly committed/cancelled). Clean ZSET entry.
+                // Hash beat us to expiry (its TTL fired before we got here) — and once it's gone we
+                // can't reconstruct (productId, qty) to restore. In practice the hash TTL is 10min
+                // while we sweep every 30s, so this branch should be unreachable; if it fires we've
+                // leaked a reservation slot and only an operator-driven reload can refill the counter.
                 redis.opsForZSet().remove(InventoryService.expiryZsetKey(), reservationId);
                 continue;
             }

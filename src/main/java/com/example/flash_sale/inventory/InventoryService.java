@@ -59,6 +59,11 @@ public class InventoryService {
         return configured;
     }
 
+    /**
+     * Presence of the Redis stock key is the source of truth for "is this product in an active
+     * flash sale right now". The admin-driven loadFlashSaleStock endpoint creates the key; once
+     * deleted (or expired by an operator), checkout falls back to the normal PG-locked path.
+     */
     public boolean hasFlashSaleStockKey(Long productId) {
         return Boolean.TRUE.equals(redis.hasKey(stockKey(productId)));
     }
