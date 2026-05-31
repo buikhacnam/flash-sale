@@ -21,19 +21,22 @@ public class InventoryService {
     private final RedisScript<Long> releaseScript;
     private final RedisScript<Long> commitScript;
     private final long reservationTtlSeconds;
+    private final long reservationHashRetentionSeconds;
 
     public InventoryService(InventoryRepository inventoryRepository,
                             StringRedisTemplate redis,
                             RedisScript<Long> reserveStockScript,
                             RedisScript<Long> releaseStockScript,
                             RedisScript<Long> commitReservationScript,
-                            @Value("${flashsale.reservation.ttl-seconds}") long reservationTtlSeconds) {
+                            @Value("${flashsale.reservation.ttl-seconds}") long reservationTtlSeconds,
+                            @Value("${flashsale.reservation.hash-retention-seconds}") long reservationHashRetentionSeconds) {
         this.inventoryRepository = inventoryRepository;
         this.redis = redis;
         this.reserveScript = reserveStockScript;
         this.releaseScript = releaseStockScript;
         this.commitScript = commitReservationScript;
         this.reservationTtlSeconds = reservationTtlSeconds;
+        this.reservationHashRetentionSeconds = reservationHashRetentionSeconds;
     }
 
     @Transactional(readOnly = true)
@@ -76,13 +79,14 @@ public class InventoryService {
     public Reservation reserveFlashSale(Long userId, Long productId, int quantity) {
         UUID reservationId = UUID.randomUUID();
         long expiresAtMs = System.currentTimeMillis() + reservationTtlSeconds * 1000L;
+        long hashTtlSeconds = reservationTtlSeconds + reservationHashRetentionSeconds;
         Long result = redis.execute(reserveScript,
                 List.of(stockKey(productId), reservationKey(reservationId), expiryZsetKey()),
                 Integer.toString(quantity),
                 reservationId.toString(),
                 Long.toString(userId),
                 Long.toString(productId),
-                Long.toString(reservationTtlSeconds),
+                Long.toString(hashTtlSeconds),
                 Long.toString(expiresAtMs));
         if (result == null) {
             throw new ApiException(ErrorCode.INTERNAL_ERROR, "Reservation script returned null");

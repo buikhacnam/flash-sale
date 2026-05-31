@@ -24,7 +24,7 @@ public class RedisConfig {
     // KEYS[2] = flashsale:reservation:{reservationId}
     // KEYS[3] = flashsale:reservations:expiry
     // ARGV[1] = qty, ARGV[2] = reservationId, ARGV[3] = userId, ARGV[4] = productId,
-    // ARGV[5] = ttlSeconds, ARGV[6] = expiresAtMs
+    // ARGV[5] = hashTtlSeconds, ARGV[6] = expiresAtMs
     // Returns 1 on success, 0 if insufficient stock, -1 if stock key missing.
     @Bean
     public RedisScript<Long> reserveStockScript() {
@@ -34,7 +34,8 @@ public class RedisConfig {
         return s;
     }
 
-    // Restores stock if the reservation hash still exists (cancel path), or if it has expired (sweep path).
+    // Restores stock if the reservation hash still exists, which is expected for both cancel and
+    // normal sweeper-driven expiry because the hash outlives the reservation deadline briefly.
     // KEYS[1] = flashsale:stock:{productId}
     // KEYS[2] = flashsale:reservation:{reservationId}
     // KEYS[3] = flashsale:reservations:expiry

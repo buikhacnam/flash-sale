@@ -9,7 +9,7 @@ local qty = tonumber(ARGV[1])
 local reservationId = ARGV[2]
 local userId = ARGV[3]
 local productId = ARGV[4]
-local ttlSeconds = tonumber(ARGV[5])
+local hashTtlSeconds = tonumber(ARGV[5])
 local expiresAtMs = tonumber(ARGV[6])
 
 if redis.call('EXISTS', stockKey) == 0 then
@@ -27,6 +27,6 @@ redis.call('HSET', reservationKey,
     'productId', productId,
     'qty', qty,
     'expiresAt', expiresAtMs)
-redis.call('EXPIRE', reservationKey, ttlSeconds)
+redis.call('EXPIRE', reservationKey, hashTtlSeconds)
 redis.call('ZADD', expiryZset, expiresAtMs, reservationId)
 return 1

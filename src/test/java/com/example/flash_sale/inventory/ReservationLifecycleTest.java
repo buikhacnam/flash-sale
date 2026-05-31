@@ -4,6 +4,7 @@ import com.example.flash_sale.TestcontainersConfiguration;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -24,6 +25,12 @@ class ReservationLifecycleTest {
 
     @Autowired
     ReservationSweeper sweeper;
+
+    @Value("${flashsale.reservation.ttl-seconds}")
+    long reservationTtlSeconds;
+
+    @Value("${flashsale.reservation.hash-retention-seconds}")
+    long reservationHashRetentionSeconds;
 
     @BeforeEach
     void cleanRedis() {
@@ -72,6 +79,16 @@ class ReservationLifecycleTest {
         // hash is still present and the ZSET says expired). Verify the ZSET entry was cleaned up.
         assertThat(redis.opsForZSet().score(
                 InventoryService.expiryZsetKey(), r.reservationId().toString())).isNull();
+    }
+
+    @Test
+    void reservation_hash_ttl_outlives_business_expiry() {
+        inventoryService.loadFlashSaleStock(2L);
+        Reservation r = inventoryService.reserveFlashSale(1L, 2L, 1);
+
+        Long ttlSeconds = redis.getExpire(InventoryService.reservationKey(r.reservationId()));
+        assertThat(ttlSeconds).isNotNull();
+        assertThat(ttlSeconds).isGreaterThanOrEqualTo(reservationTtlSeconds + reservationHashRetentionSeconds - 1);
     }
 
     @Test

@@ -20,13 +20,13 @@ All three scripts work on the same three keys, in the same order, so the script-
 
 **Purpose:** atomically check-and-decrement the stock counter, then record the reservation.
 
-**ARGV:** `qty`, `reservationId`, `userId`, `productId`, `ttlSeconds`, `expiresAtMs`.
+**ARGV:** `qty`, `reservationId`, `userId`, `productId`, `hashTtlSeconds`, `expiresAtMs`.
 
 **Effects:**
 
 1. If the stock key doesn't exist → return `-1` (sale not loaded).
 2. If `stock < qty` → return `0` (insufficient stock).
-3. Otherwise: `DECRBY stock qty`, `HSET reservation {userId,productId,qty,expiresAt}`, `EXPIRE reservation ttlSeconds`, `ZADD expiry expiresAtMs reservationId`, return `1`.
+3. Otherwise: `DECRBY stock qty`, `HSET reservation {userId,productId,qty,expiresAt}`, `EXPIRE reservation hashTtlSeconds`, `ZADD expiry expiresAtMs reservationId`, return `1`.
 
 **Called by:** `InventoryService.reserveFlashSale` (only used in the checkout path for products with a loaded flash-sale counter).
 
@@ -90,4 +90,4 @@ Release and commit both clean up bookkeeping; the only difference is whether the
 
 - **Redis restart loses everything.** All three scripts operate on in-memory Redis state. If Redis goes down without AOF/RDB persistence, every live reservation is gone and the counter is gone — the admin must reload the sale via `POST /api/inventory/flash-sale/load/{productId}`.
 - **The reserve script does not check whether the admin already nuked the sale mid-flight.** It just checks `EXISTS stockKey`. If the admin DELs the stock key after a reservation was made, the release script's "stock key still alive?" guard skips the `INCRBY` so the counter doesn't resurrect at a wrong value — the reservation is effectively orphaned, which is the right behavior.
-- **Hash TTL vs sweeper race.** The reservation hash has a 10-min TTL. The sweeper polls the expiry ZSET every 30 s. If the hash's TTL fires before the sweeper picks the ZSET entry up, the sweeper can't reconstruct `(productId, qty)` to restore — it just removes the orphaned ZSET entry. With a 30 s sweep interval and 10-min TTL this branch shouldn't fire in practice; if it does, it's a small stock leak that requires an operator reload to fix.
+- **Hash retention buffer.** The reservation hash intentionally outlives the business expiry by a small buffer so the sweeper can still reconstruct `(productId, qty)` and restore stock on its next pass. If the hash is already gone when the sweeper reaches an expired ZSET entry, the buffer was exceeded and the branch is treated as an anomaly.
