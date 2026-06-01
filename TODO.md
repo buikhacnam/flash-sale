@@ -1,6 +1,6 @@
 # TODO
 
-## Normal-order abandonment — no automatic stock release
+## 1. Normal-order abandonment — no automatic stock release
 
 ### Problem
 
@@ -36,7 +36,7 @@ Defer. Option 1 is the right shape (matches the rest of the architecture) but th
 
 ---
 
-## Flash sale has no user-visible benefit
+## 2. Flash sale has no user-visible benefit
 
 ### Problem
 
@@ -70,7 +70,7 @@ Defer. #1 + #4 together would be the smallest meaningful slice (real discount + 
 
 ---
 
-## Flash-sale checkout still writes synchronously to PG
+## 3. Flash-sale checkout still writes synchronously to PG
 
 ### Problem
 

@@ -34,7 +34,8 @@ public class Order {
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
 
-    @OneToMany(mappedBy = "order", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    @OneToMany(cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.EAGER)
+    @JoinColumn(name = "order_id", nullable = false)
     private List<OrderItem> items = new ArrayList<>();
 
     protected Order() {
@@ -82,7 +83,6 @@ public class Order {
     }
 
     public void addItem(OrderItem item) {
-        item.attachTo(this);
         items.add(item);
     }
 

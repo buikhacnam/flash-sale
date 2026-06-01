@@ -13,10 +13,6 @@ public class OrderItem {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
-    @ManyToOne(fetch = FetchType.LAZY, optional = false)
-    @JoinColumn(name = "order_id", nullable = false)
-    private Order order;
-
     @Column(name = "product_id", nullable = false)
     private Long productId;
 
@@ -30,7 +26,7 @@ public class OrderItem {
     private BigDecimal lineTotal;
 
     @Column(name = "reservation_id")
-private UUID reservationId;
+    private UUID reservationId;
 
     protected OrderItem() {
     }
@@ -41,10 +37,6 @@ private UUID reservationId;
         this.unitPrice = unitPrice;
         this.lineTotal = unitPrice.multiply(BigDecimal.valueOf(quantity));
         this.reservationId = reservationId;
-    }
-
-    void attachTo(Order order) {
-        this.order = order;
     }
 
     public Long getId() {
