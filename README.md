@@ -57,47 +57,49 @@ Tests (spin up their own containers):
 
 The system uses a numeric `X-User-Id` header in lieu of auth. Demo users 1–5 are seeded.
 
+Load flash-sale stock for product 1 (admin)
 ```bash
-# 1. Load flash-sale stock for product 1 (admin)
 curl -X POST localhost:8080/api/inventory/flash-sale/load/1
 ````
 
+Inspect inventory — PG available + Redis remaining
 ```bash
-# 2. Inspect inventory — PG available + Redis remaining
 curl localhost:8080/api/inventory/1
 ```
 
+
+Add product 1 to user 1's cart
 ```bash
-# 3. Add product 1 to user 1's cart
 curl -X POST localhost:8080/api/cart/items \
   -H 'Content-Type: application/json' \
   -H 'X-User-Id: 1' \
   -d '{"productId": 1, "quantity": 2}'
-
+```
+```bash
 curl -H 'X-User-Id: 1' localhost:8080/api/cart
 ```
 
+Checkout (idempotency-key required)
 ```bash
-# 4. Checkout (idempotency-key required)
 curl -X POST localhost:8080/api/orders/checkout \
   -H 'X-User-Id: 1' \
   -H 'Idempotency-Key: 11111111-2222-3333-4444-555555555555'
-
-# Retrying with the same Idempotency-Key returns the same order, no duplicate.
 ```
+Retrying with the same Idempotency-Key returns the same order, no duplicate.
 
+
+Confirm payment
 ```bash
-# 5. Confirm payment
 curl -X POST localhost:8080/api/orders/1/confirm-payment -H 'X-User-Id: 1'
 ```
 
+Or cancel and release stock
 ```bash
-# Or cancel and release stock
 curl -X POST localhost:8080/api/orders/1/cancel -H 'X-User-Id: 1'
 ```
 
+Browse
 ```bash
-# 6. Browse
 curl -H 'X-User-Id: 1' localhost:8080/api/orders
 curl -H 'X-User-Id: 1' localhost:8080/api/orders/1
 ```

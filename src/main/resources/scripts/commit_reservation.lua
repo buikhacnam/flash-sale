@@ -7,6 +7,8 @@ local expiryZset = KEYS[2]
 local reservationId = ARGV[1]
 
 local existed = redis.call('EXISTS', reservationKey)
+-- Drop the reservation payload after payment success; stock stays consumed.
 redis.call('DEL', reservationKey)
+-- Remove the expiry index entry so the sweeper does not try to release a sold reservation.
 redis.call('ZREM', expiryZset, reservationId)
 return existed
