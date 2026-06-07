@@ -8,10 +8,12 @@ import com.example.flash_sale.inventory.InventoryService;
 import com.example.flash_sale.inventory.Reservation;
 import com.example.flash_sale.payment.PaymentService;
 import com.example.flash_sale.product.Product;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,13 +25,16 @@ public class OrderPersistenceService {
     private final OrderRepository orderRepository;
     private final PaymentService paymentService;
     private final InventoryService inventoryService;
+    private final long pendingPaymentTtlSeconds;
 
     public OrderPersistenceService(OrderRepository orderRepository,
                                    PaymentService paymentService,
-                                   InventoryService inventoryService) {
+                                   InventoryService inventoryService,
+                                   @Value("${orders.pending-payment.ttl-seconds}") long pendingPaymentTtlSeconds) {
         this.orderRepository = orderRepository;
         this.paymentService = paymentService;
         this.inventoryService = inventoryService;
+        this.pendingPaymentTtlSeconds = pendingPaymentTtlSeconds;
     }
 
     /**
@@ -69,7 +74,7 @@ public class OrderPersistenceService {
             total = total.add(p.getPrice().multiply(BigDecimal.valueOf(item.quantity())));
         }
 
-        Order order = new Order(userId, total);
+        Order order = new Order(userId, total, Instant.now().plusSeconds(pendingPaymentTtlSeconds));
         for (CartItemDto item : cart.items()) {
             Product p = productsById.get(item.productId());
             Reservation r = byProduct.get(item.productId());

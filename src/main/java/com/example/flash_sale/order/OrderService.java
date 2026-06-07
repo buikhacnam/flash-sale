@@ -7,17 +7,21 @@ import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
 import com.example.flash_sale.inventory.InventoryService;
 import com.example.flash_sale.inventory.Reservation;
+import com.example.flash_sale.payment.PaymentStatus;
 import com.example.flash_sale.payment.PaymentService;
 import com.example.flash_sale.product.Product;
 import com.example.flash_sale.product.ProductRepository;
 import com.example.flash_sale.user.UserService;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Instant;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -38,6 +42,7 @@ public class OrderService {
     private final StringRedisTemplate redis;
     private final ObjectMapper objectMapper;
     private final Duration idempotencyTtl;
+    private final OrderService self;
 
     public OrderService(OrderRepository orderRepository,
                         ProductRepository productRepository,
@@ -48,6 +53,7 @@ public class OrderService {
                         OrderPersistenceService orderPersistenceService,
                         StringRedisTemplate redis,
                         ObjectMapper objectMapper,
+                        @Lazy OrderService self,
                         @Value("${flashsale.idempotency.ttl-seconds}") long idempotencyTtlSeconds) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
@@ -58,6 +64,7 @@ public class OrderService {
         this.orderPersistenceService = orderPersistenceService;
         this.redis = redis;
         this.objectMapper = objectMapper;
+        this.self = self;
         this.idempotencyTtl = Duration.ofSeconds(idempotencyTtlSeconds);
     }
 
@@ -115,6 +122,10 @@ public class OrderService {
     @Transactional
     public OrderDto confirmPayment(Long userId, Long orderId) {
         Order order = requireOwnedOrder(userId, orderId);
+        if (isExpiredPending(order)) {
+            self.expireOrder(orderId);
+            order = requireOwnedOrder(userId, orderId);
+        }
         if (order.getStatus() == OrderStatus.CONFIRMED) {
             return OrderDto.from(order);
         }
@@ -143,6 +154,9 @@ public class OrderService {
     @Transactional
     public OrderDto cancel(Long userId, Long orderId) {
         Order order = requireOwnedOrder(userId, orderId);
+        if (isExpiredPending(order)) {
+            return self.expireOrder(orderId);
+        }
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return OrderDto.from(order);
         }
@@ -166,15 +180,42 @@ public class OrderService {
         return OrderDto.from(orderRepository.save(order));
     }
 
-    @Transactional(readOnly = true)
-    public OrderDto get(Long userId, Long orderId) {
-        return OrderDto.from(requireOwnedOrder(userId, orderId));
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public OrderDto expireOrder(Long orderId) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new ApiException(ErrorCode.ORDER_NOT_FOUND,
+                        "Order not found", Map.of("orderId", orderId)));
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT || !isExpiredPending(order)) {
+            return OrderDto.from(order);
+        }
+        if (paymentService.require(orderId).getStatus() == PaymentStatus.PENDING) {
+            paymentService.markFailed(orderId);
+        }
+        for (OrderItem item : order.getItems()) {
+            if (item.getReservationId() != null) {
+                inventoryService.releaseReservation(item.getReservationId(), item.getProductId(), item.getQuantity());
+            }
+        }
+        inventoryService.restoreNormalStock(qtyByProduct(order, false));
+        order.markExpired();
+        return OrderDto.from(orderRepository.save(order));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
+    public OrderDto get(Long userId, Long orderId) {
+        Order order = requireOwnedOrder(userId, orderId);
+        if (isExpiredPending(order)) {
+            return self.expireOrder(orderId);
+        }
+        return OrderDto.from(order);
+    }
+
+    @Transactional
     public List<OrderDto> listForUser(Long userId) {
         userService.requireUser(userId);
-        return orderRepository.findAllByUserIdOrderByIdDesc(userId).stream().map(OrderDto::from).toList();
+        return orderRepository.findAllByUserIdOrderByIdDesc(userId).stream()
+                .map(order -> isExpiredPending(order) ? self.expireOrder(order.getId()) : OrderDto.from(order))
+                .toList();
     }
 
     private Order requireOwnedOrder(Long userId, Long orderId) {
@@ -252,5 +293,12 @@ public class OrderService {
             redis.opsForValue().set(key, objectMapper.writeValueAsString(dto), idempotencyTtl);
         } catch (JsonProcessingException ignored) {
         }
+    }
+
+    private boolean isExpiredPending(Order order) {
+        Instant expiresAt = order.getExpiresAt();
+        return order.getStatus() == OrderStatus.PENDING_PAYMENT
+                && expiresAt != null
+                && !expiresAt.isAfter(Instant.now());
     }
 }

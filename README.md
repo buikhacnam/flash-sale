@@ -44,8 +44,8 @@ docker compose up -d        # starts postgres + redis on 5432 / 6379
 ./gradlew bootRun
 ```
 
-Swagger UI: <http://localhost:8080/swagger-ui.html>
-Actuator health: <http://localhost:8080/actuator/health>
+Swagger UI: <http://localhost:8081/swagger-ui.html>
+Actuator health: <http://localhost:8081/actuator/health>
 
 Tests (spin up their own containers):
 
@@ -59,29 +59,29 @@ The system uses a numeric `X-User-Id` header in lieu of auth. Demo users 1–5 a
 
 Load flash-sale stock for product 1 (admin)
 ```bash
-curl -X POST localhost:8080/api/inventory/flash-sale/load/1
+curl -X POST localhost:8081/api/inventory/flash-sale/load/1
 ````
 
 Inspect inventory — PG available + Redis remaining
 ```bash
-curl localhost:8080/api/inventory/1
+curl localhost:8081/api/inventory/1
 ```
 
 
 Add product 1 to user 1's cart
 ```bash
-curl -X POST localhost:8080/api/cart/items \
+curl -X POST localhost:8081/api/cart/items \
   -H 'Content-Type: application/json' \
   -H 'X-User-Id: 1' \
   -d '{"productId": 1, "quantity": 2}'
 ```
 ```bash
-curl -H 'X-User-Id: 1' localhost:8080/api/cart
+curl -H 'X-User-Id: 1' localhost:8081/api/cart
 ```
 
 Checkout (idempotency-key required)
 ```bash
-curl -X POST localhost:8080/api/orders/checkout \
+curl -X POST localhost:8081/api/orders/checkout \
   -H 'X-User-Id: 1' \
   -H 'Idempotency-Key: 11111111-2222-3333-4444-555555555555'
 ```
@@ -90,18 +90,18 @@ Retrying with the same Idempotency-Key returns the same order, no duplicate.
 
 Confirm payment
 ```bash
-curl -X POST localhost:8080/api/orders/1/confirm-payment -H 'X-User-Id: 1'
+curl -X POST localhost:8081/api/orders/1/confirm-payment -H 'X-User-Id: 1'
 ```
 
 Or cancel and release stock
 ```bash
-curl -X POST localhost:8080/api/orders/1/cancel -H 'X-User-Id: 1'
+curl -X POST localhost:8081/api/orders/1/cancel -H 'X-User-Id: 1'
 ```
 
 Browse
 ```bash
-curl -H 'X-User-Id: 1' localhost:8080/api/orders
-curl -H 'X-User-Id: 1' localhost:8080/api/orders/1
+curl -H 'X-User-Id: 1' localhost:8081/api/orders
+curl -H 'X-User-Id: 1' localhost:8081/api/orders/1
 ```
 
 ## Verifying Redis keys

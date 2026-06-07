@@ -34,6 +34,13 @@ For flash-sale items the problem is solved by the Redis hash TTL + `ReservationS
 
 Defer. Option 1 is the right shape (matches the rest of the architecture) but the lost-event caveat means a real implementation also needs a low-frequency PG safety-net reconciler — essentially #1 + a watered-down #2. Not blocking for the demo.
 
+### Future follow-up
+
+- Add Redis keyspace listeners as an optional latency optimization on top of durable schedulers:
+  - normal orders: `order:expiry:*` listener calls `OrderService.expireOrder(orderId)`
+  - flash-sale reservations: listener can opportunistically trigger the same cleanup path the `ReservationSweeper` already performs
+- Keep the DB/Redis scheduled reconcilers as the correctness backstop because keyspace notifications are best-effort.
+
 ---
 
 ## 2. Flash sale has no user-visible benefit
@@ -160,4 +167,3 @@ The cancel path has the symmetric problem in mirror form: if `releaseReservation
 ### Decision
 
 Defer. #2 (outbox) is the right answer for a real system and would also subsume parts of the message-queue TODO above. #1 is a cheap mitigation that makes the window narrower without solving it. #3 is a sensible long-term backstop regardless. Not blocking for the demo because retries do recover consistency; the failure mode is "silent stock leak until operator notices," which is acceptable in a demo but not in production.
-

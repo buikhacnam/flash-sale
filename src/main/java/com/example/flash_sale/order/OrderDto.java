@@ -10,6 +10,7 @@ public record OrderDto(Long id,
                        OrderStatus status,
                        BigDecimal totalAmount,
                        List<OrderItemDto> items,
+                       Instant expiresAt,
                        Instant createdAt,
                        Instant updatedAt) {
 
@@ -26,6 +27,6 @@ public record OrderDto(Long id,
                         i.getUnitPrice(), i.getLineTotal(), i.getReservationId()))
                 .toList();
         return new OrderDto(o.getId(), o.getUserId(), o.getStatus(), o.getTotalAmount(),
-                items, o.getCreatedAt(), o.getUpdatedAt());
+                items, o.getExpiresAt(), o.getCreatedAt(), o.getUpdatedAt());
     }
 }
