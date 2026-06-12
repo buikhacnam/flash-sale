@@ -50,6 +50,7 @@ public class PaymentService {
         return p;
     }
 
+    //TODO is the transaction affected / needed?
     @Transactional(readOnly = true)
     public Payment require(Long orderId) {
         return paymentRepository.findByOrderId(orderId)

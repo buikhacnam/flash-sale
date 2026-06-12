@@ -7,11 +7,15 @@ import com.example.flash_sale.common.error.ErrorCode;
 import com.example.flash_sale.inventory.InventoryService;
 import com.example.flash_sale.inventory.Reservation;
 import com.example.flash_sale.payment.PaymentService;
+import com.example.flash_sale.payment.PaymentStatus;
 import com.example.flash_sale.product.Product;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Propagation;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -23,13 +27,13 @@ public class OrderPersistenceService {
     private final OrderRepository orderRepository;
     private final PaymentService paymentService;
     private final InventoryService inventoryService;
+    private final long pendingPaymentTtlSeconds;
 
-    public OrderPersistenceService(OrderRepository orderRepository,
-                                   PaymentService paymentService,
-                                   InventoryService inventoryService) {
+    public OrderPersistenceService(OrderRepository orderRepository, PaymentService paymentService, InventoryService inventoryService, @Value("${order.pending-payment.ttl-seconds}") long pendingPaymentTtlSeconds) {
         this.orderRepository = orderRepository;
         this.paymentService = paymentService;
         this.inventoryService = inventoryService;
+        this.pendingPaymentTtlSeconds = pendingPaymentTtlSeconds;
     }
 
     /**
@@ -37,10 +41,7 @@ public class OrderPersistenceService {
      * create the pending payment row. Flash-sale lines have already been gated in Redis by the caller.
      */
     @Transactional
-    public Order createOrderWithPayment(Long userId,
-                                        CartDto cart,
-                                        Map<Long, Product> productsById,
-                                        List<Reservation> reservations) {
+    public Order createOrderWithPayment(Long userId, CartDto cart, Map<Long, Product> productsById, List<Reservation> reservations) {
         // Split the cart: flash-sale lines were already gated in Redis by the caller and arrive here
         // as Reservation handles; everything else still needs a PG row lock + decrement, which we do
         // inside this tx so the order + payment + stock change commit atomically.
@@ -63,21 +64,57 @@ public class OrderPersistenceService {
         for (CartItemDto item : cart.items()) {
             Product p = productsById.get(item.productId());
             if (p == null) {
-                throw new ApiException(ErrorCode.PRODUCT_NOT_FOUND,
-                        "Product not found", Map.of("productId", item.productId()));
+                throw new ApiException(ErrorCode.PRODUCT_NOT_FOUND, "Product not found", Map.of("productId", item.productId()));
             }
             total = total.add(p.getPrice().multiply(BigDecimal.valueOf(item.quantity())));
         }
 
-        Order order = new Order(userId, total);
+        Order order = new Order(userId, total, Instant.now().plusSeconds(pendingPaymentTtlSeconds));
         for (CartItemDto item : cart.items()) {
             Product p = productsById.get(item.productId());
             Reservation r = byProduct.get(item.productId());
-            order.addItem(new OrderItem(p.getId(), item.quantity(), p.getPrice(),
-                    r == null ? null : r.reservationId()));
+            order.addItem(new OrderItem(p.getId(), item.quantity(), p.getPrice(), r == null ? null : r.reservationId()));
         }
         Order persisted = orderRepository.save(order);
         paymentService.createPending(persisted.getId(), persisted.getTotalAmount());
         return persisted;
+    }
+
+    @Transactional(propagation = Propagation.REQUIRES_NEW)
+    public OrderDto expiredOrder(Long orderId) {
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new ApiException(ErrorCode.ORDER_NOT_FOUND, "Order not found!"));
+        if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
+            return OrderDto.from(order);
+        }
+        //mark associate payment as failed if there is
+        if (paymentService.require(orderId).getStatus() == PaymentStatus.PENDING) {
+            paymentService.markFailed(orderId);
+        }
+
+        //loop through items in the order to release reservation (for flash sale only).
+        for (OrderItem item : order.getItems()) {
+            if (item.getReservationId() != null) {
+                inventoryService.releaseReservation(item.getReservationId(), item.getProductId(), item.getQuantity());
+            }
+        }
+
+        //restore stock
+        inventoryService.restoreNormalStock(qtyByProduct(order, false));
+
+        order.markExpired();
+        return OrderDto.from(order);
+
+    }
+
+
+    private Map<Long, Integer> qtyByProduct(Order order, boolean flashSaleLinesOnly) {
+        Map<Long, Integer> map = new LinkedHashMap<>();
+        for (OrderItem item : order.getItems()) {
+            boolean isFlashSale = item.getReservationId() != null;
+            if (flashSaleLinesOnly == isFlashSale) {
+                map.merge(item.getProductId(), item.getQuantity(), Integer::sum);
+            }
+        }
+        return map;
     }
 }

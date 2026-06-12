@@ -1,6 +1,6 @@
 # TODO
 
-## 1. Normal-order abandonment — no automatic stock release
+## [x] 1. Normal-order abandonment — no automatic stock release
 
 ### Problem
 
@@ -18,7 +18,7 @@ For flash-sale items the problem is solved by the Redis hash TTL + `ReservationS
    - Pros: event-driven, near-instant expiry. Symmetric with the flash-sale Redis-TTL pattern.
    - Cons: notifications are **best-effort** — not persisted, not replayed. If Redis restarts or the listener is down when the event fires, the expiry is lost. A periodic safety-net reconciler would close this gap.
 
-2. **PG-side scheduled sweeper**
+2.  [x]**PG-side scheduled sweeper**
    - Add `expires_at TIMESTAMPTZ` to `orders`, set at checkout.
    - `@Scheduled` job runs every N seconds, finds `WHERE status='PENDING_PAYMENT' AND expires_at < now()`, calls `OrderService.expireOrder` for each.
    - Pros: durable, simple, no Redis config gymnastics, survives Redis restarts.
@@ -33,6 +33,11 @@ For flash-sale items the problem is solved by the Redis hash TTL + `ReservationS
 ### Decision
 
 Defer. Option 1 is the right shape (matches the rest of the architecture) but the lost-event caveat means a real implementation also needs a low-frequency PG safety-net reconciler — essentially #1 + a watered-down #2. Not blocking for the demo.
+
+### Follow-up
+
+- Stop coupling integration tests to production/demo seed data in `V2__seed.sql`.
+- Keep Flyway schema migrations shared, but move test fixtures toward test-local setup or test-only seed helpers/SQL so tests do not depend on hard-coded product IDs and stock values from prod data.
 
 ---
 
@@ -160,4 +165,3 @@ The cancel path has the symmetric problem in mirror form: if `releaseReservation
 ### Decision
 
 Defer. #2 (outbox) is the right answer for a real system and would also subsume parts of the message-queue TODO above. #1 is a cheap mitigation that makes the window narrower without solving it. #3 is a sensible long-term backstop regardless. Not blocking for the demo because retries do recover consistency; the failure mode is "silent stock leak until operator notices," which is acceptable in a demo but not in production.
-

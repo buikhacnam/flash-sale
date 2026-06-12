@@ -19,11 +19,8 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Duration;
-import java.util.ArrayList;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.time.Instant;
+import java.util.*;
 
 @Service
 public class OrderService {
@@ -39,16 +36,7 @@ public class OrderService {
     private final ObjectMapper objectMapper;
     private final Duration idempotencyTtl;
 
-    public OrderService(OrderRepository orderRepository,
-                        ProductRepository productRepository,
-                        CartService cartService,
-                        InventoryService inventoryService,
-                        PaymentService paymentService,
-                        UserService userService,
-                        OrderPersistenceService orderPersistenceService,
-                        StringRedisTemplate redis,
-                        ObjectMapper objectMapper,
-                        @Value("${flashsale.idempotency.ttl-seconds}") long idempotencyTtlSeconds) {
+    public OrderService(OrderRepository orderRepository, ProductRepository productRepository, CartService cartService, InventoryService inventoryService, PaymentService paymentService, UserService userService, OrderPersistenceService orderPersistenceService, StringRedisTemplate redis, ObjectMapper objectMapper, @Value("${flashsale.idempotency.ttl-seconds}") long idempotencyTtlSeconds) {
         this.orderRepository = orderRepository;
         this.productRepository = productRepository;
         this.cartService = cartService;
@@ -61,12 +49,19 @@ public class OrderService {
         this.idempotencyTtl = Duration.ofSeconds(idempotencyTtlSeconds);
     }
 
+    private static String idempotencyKeyOf(String requestId) {
+        if (requestId == null || requestId.isBlank()) {
+            throw new ApiException(ErrorCode.VALIDATION_ERROR, "Missing Idempotency-Key header");
+        }
+        return "idem:checkout:" + requestId;
+    }
+
     /**
      * Checkout flow:
      * 1. Idempotency check — replay cached response if Idempotency-Key has been seen.
      * 2. Validate cart + load product prices.
      * 3. For each line that has a loaded flash-sale stock key, atomically reserve in Redis.
-     *    Roll back successful reservations if a later line fails.
+     * Roll back successful reservations if a later line fails.
      * 4. Persist order + pending payment in a single DB tx.
      * 5. Cache full response under the idempotency key for replay within TTL.
      */
@@ -114,14 +109,25 @@ public class OrderService {
 
     @Transactional
     public OrderDto confirmPayment(Long userId, Long orderId) {
+        // this acts as the open webhook for payment.
+        // ...validation stuff done
+        // ...
         Order order = requireOwnedOrder(userId, orderId);
+
         if (order.getStatus() == OrderStatus.CONFIRMED) {
             return OrderDto.from(order);
         }
+        if (isExpiredPending(order)) {
+            orderPersistenceService.expiredOrder(orderId);
+            // TODO: if the PSP captured funds after expiry, trigger refund/void reconciliation here.
+            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION, "Order payment arrived after expiry", Map.of("status", OrderStatus.EXPIRED.name()));
+        }
+        if (order.getStatus() == OrderStatus.EXPIRED) {
+            // TODO: if the PSP captured funds after expiry, trigger refund/void reconciliation here.
+            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION, "Order payment arrived after expiry", Map.of("status", order.getStatus().name()));
+        }
         if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION,
-                    "Order cannot be confirmed in its current state",
-                    Map.of("status", order.getStatus().name()));
+            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION, "Order cannot be confirmed in its current state", Map.of("status", order.getStatus().name()));
         }
         paymentService.markSuccess(orderId);
         // PG was deliberately not touched at checkout for flash-sale lines (the hot row would have
@@ -143,13 +149,14 @@ public class OrderService {
     @Transactional
     public OrderDto cancel(Long userId, Long orderId) {
         Order order = requireOwnedOrder(userId, orderId);
+        if (isExpiredPending(order)) {
+            return orderPersistenceService.expiredOrder(orderId);
+        }
         if (order.getStatus() == OrderStatus.CANCELLED) {
             return OrderDto.from(order);
         }
         if (order.getStatus() != OrderStatus.PENDING_PAYMENT) {
-            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION,
-                    "Order cannot be cancelled in its current state",
-                    Map.of("status", order.getStatus().name()));
+            throw new ApiException(ErrorCode.INVALID_STATE_TRANSITION, "Order cannot be cancelled in its current state", Map.of("status", order.getStatus().name()));
         }
         try {
             paymentService.markFailed(orderId);
@@ -166,9 +173,14 @@ public class OrderService {
         return OrderDto.from(orderRepository.save(order));
     }
 
-    @Transactional(readOnly = true)
+    @Transactional
     public OrderDto get(Long userId, Long orderId) {
-        return OrderDto.from(requireOwnedOrder(userId, orderId));
+        Order order = requireOwnedOrder(userId, orderId);
+        if (isExpiredPending(order)) {
+            return orderPersistenceService.expiredOrder(orderId);
+        }
+
+        return OrderDto.from(order);
     }
 
     @Transactional(readOnly = true)
@@ -179,12 +191,9 @@ public class OrderService {
 
     private Order requireOwnedOrder(Long userId, Long orderId) {
         userService.requireUser(userId);
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> new ApiException(ErrorCode.ORDER_NOT_FOUND,
-                        "Order not found", Map.of("orderId", orderId)));
+        Order order = orderRepository.findById(orderId).orElseThrow(() -> new ApiException(ErrorCode.ORDER_NOT_FOUND, "Order not found", Map.of("orderId", orderId)));
         if (!order.getUserId().equals(userId)) {
-            throw new ApiException(ErrorCode.ORDER_NOT_OWNED,
-                    "Order belongs to another user", Map.of("orderId", orderId));
+            throw new ApiException(ErrorCode.ORDER_NOT_OWNED, "Order belongs to another user", Map.of("orderId", orderId));
         }
         return order;
     }
@@ -193,8 +202,8 @@ public class OrderService {
      * Collapse order items into a productId → total-qty map, filtered by line type.
      * A line is "flash-sale" iff reservation_id is non-null — that UUID is only set when checkout
      * went through the Redis reserve path. The boolean argument is a selector, not a toggle:
-     *   true  → include only flash-sale lines (used by confirmPayment for the PG decrement)
-     *   false → include only normal lines    (used by cancel for the PG restore)
+     * true  → include only flash-sale lines (used by confirmPayment for the PG decrement)
+     * false → include only normal lines    (used by cancel for the PG restore)
      * The equality check (flashSaleLinesOnly == isFlashSale) is just "does this line match the filter".
      */
     private Map<Long, Integer> qtyByProduct(Order order, boolean flashSaleLinesOnly) {
@@ -208,6 +217,10 @@ public class OrderService {
         return map;
     }
 
+    // Idempotency: store the full response, not just the orderId. A retrying client must see the
+    // same payload (same id, same totals, same items) without us re-running checkout — if we cached
+    // only the id we'd still have to re-query and might race a concurrent cancel/confirm.
+
     private Map<Long, Product> loadProducts(List<CartItemDto> items) {
         List<Long> ids = items.stream().map(CartItemDto::productId).toList();
         Map<Long, Product> map = new HashMap<>();
@@ -216,22 +229,10 @@ public class OrderService {
         }
         for (Long id : ids) {
             if (!map.containsKey(id)) {
-                throw new ApiException(ErrorCode.PRODUCT_NOT_FOUND,
-                        "Product not found", Map.of("productId", id));
+                throw new ApiException(ErrorCode.PRODUCT_NOT_FOUND, "Product not found", Map.of("productId", id));
             }
         }
         return map;
-    }
-
-    // Idempotency: store the full response, not just the orderId. A retrying client must see the
-    // same payload (same id, same totals, same items) without us re-running checkout — if we cached
-    // only the id we'd still have to re-query and might race a concurrent cancel/confirm.
-
-    private static String idempotencyKeyOf(String requestId) {
-        if (requestId == null || requestId.isBlank()) {
-            throw new ApiException(ErrorCode.VALIDATION_ERROR, "Missing Idempotency-Key header");
-        }
-        return "idem:checkout:" + requestId;
     }
 
     private OrderDto readIdempotent(String key) {
@@ -252,5 +253,10 @@ public class OrderService {
             redis.opsForValue().set(key, objectMapper.writeValueAsString(dto), idempotencyTtl);
         } catch (JsonProcessingException ignored) {
         }
+    }
+
+    private boolean isExpiredPending(Order order) {
+        Instant expiresAt = order.getExpiresAt();
+        return order.getStatus() == OrderStatus.PENDING_PAYMENT && expiresAt != null && !expiresAt.isAfter(Instant.now());
     }
 }

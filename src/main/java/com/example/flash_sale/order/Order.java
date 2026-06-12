@@ -28,6 +28,9 @@ public class Order {
     @Version
     private Long version;
 
+    @Column(name = "expires_at")
+    private Instant expiresAt;
+
     @Column(name = "created_at", nullable = false, updatable = false)
     private Instant createdAt;
 
@@ -42,9 +45,14 @@ public class Order {
     }
 
     public Order(Long userId, BigDecimal totalAmount) {
+        this(userId, totalAmount, null);
+    }
+
+    public Order(Long userId, BigDecimal totalAmount, Instant expiresAt) {
         this.userId = userId;
         this.totalAmount = totalAmount;
         this.status = OrderStatus.PENDING_PAYMENT;
+        this.expiresAt = expiresAt;
         Instant now = Instant.now();
         this.createdAt = now;
         this.updatedAt = now;
@@ -70,6 +78,14 @@ public class Order {
         return version;
     }
 
+    public Instant getExpiresAt() {
+        return expiresAt;
+    }
+
+    public void setExpiresAt(Instant expiresAt) {
+        this.expiresAt = expiresAt;
+    }
+
     public Instant getCreatedAt() {
         return createdAt;
     }
@@ -93,6 +109,11 @@ public class Order {
 
     public void markCancelled() {
         this.status = OrderStatus.CANCELLED;
+        this.updatedAt = Instant.now();
+    }
+
+    public void markExpired() {
+        this.status = OrderStatus.EXPIRED;
         this.updatedAt = Instant.now();
     }
 }
