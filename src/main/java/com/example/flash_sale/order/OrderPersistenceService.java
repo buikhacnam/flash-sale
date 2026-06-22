@@ -4,6 +4,8 @@ import com.example.flash_sale.cart.CartDto;
 import com.example.flash_sale.cart.CartItemDto;
 import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
+import com.example.flash_sale.inventory.Inventory;
+import com.example.flash_sale.inventory.InventoryRepository;
 import com.example.flash_sale.inventory.InventoryService;
 import com.example.flash_sale.inventory.Reservation;
 import com.example.flash_sale.payment.PaymentService;
@@ -16,10 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.HashMap;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Service
 public class OrderPersistenceService {
@@ -27,12 +26,14 @@ public class OrderPersistenceService {
     private final OrderRepository orderRepository;
     private final PaymentService paymentService;
     private final InventoryService inventoryService;
+    private final InventoryRepository inventoryRepository;
     private final long pendingPaymentTtlSeconds;
 
-    public OrderPersistenceService(OrderRepository orderRepository, PaymentService paymentService, InventoryService inventoryService, @Value("${order.pending-payment.ttl-seconds}") long pendingPaymentTtlSeconds) {
+    public OrderPersistenceService(OrderRepository orderRepository, PaymentService paymentService, InventoryService inventoryService, InventoryRepository inventoryRepository, @Value("${order.pending-payment.ttl-seconds}") long pendingPaymentTtlSeconds) {
         this.orderRepository = orderRepository;
         this.paymentService = paymentService;
         this.inventoryService = inventoryService;
+        this.inventoryRepository = inventoryRepository;
         this.pendingPaymentTtlSeconds = pendingPaymentTtlSeconds;
     }
 
@@ -66,14 +67,16 @@ public class OrderPersistenceService {
             if (p == null) {
                 throw new ApiException(ErrorCode.PRODUCT_NOT_FOUND, "Product not found", Map.of("productId", item.productId()));
             }
-            total = total.add(p.getPrice().multiply(BigDecimal.valueOf(item.quantity())));
+            BigDecimal price = effectiveUnitPrice(item.productId(), p.getPrice(), byProduct);
+            total = total.add(price.multiply(BigDecimal.valueOf(item.quantity())));
         }
 
         Order order = new Order(userId, total, Instant.now().plusSeconds(pendingPaymentTtlSeconds));
         for (CartItemDto item : cart.items()) {
             Product p = productsById.get(item.productId());
             Reservation r = byProduct.get(item.productId());
-            order.addItem(new OrderItem(p.getId(), item.quantity(), p.getPrice(), r == null ? null : r.reservationId()));
+            BigDecimal price = effectiveUnitPrice(item.productId(), p.getPrice(), byProduct);
+            order.addItem(new OrderItem(p.getId(), item.quantity(), price, r == null ? null : r.reservationId()));
         }
         Order persisted = orderRepository.save(order);
         paymentService.createPending(persisted.getId(), persisted.getTotalAmount());
@@ -116,5 +119,16 @@ public class OrderPersistenceService {
             }
         }
         return map;
+    }
+
+    private BigDecimal effectiveUnitPrice(Long productId, BigDecimal defaultPrice, Map<Long, Reservation> reservationsByProduct) {
+        if (!reservationsByProduct.containsKey(productId)) {
+            return defaultPrice;
+        }
+        Optional<Inventory> inventory = inventoryRepository.findByProductId(productId);
+        if (inventory.isEmpty() || inventory.get().getFlashSalePrice() == null) {
+            return defaultPrice;
+        }
+        return inventory.get().getFlashSalePrice();
     }
 }

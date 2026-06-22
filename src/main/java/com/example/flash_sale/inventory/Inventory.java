@@ -2,6 +2,7 @@ package com.example.flash_sale.inventory;
 
 import jakarta.persistence.*;
 
+import java.math.BigDecimal;
 import java.time.Instant;
 
 @Entity
@@ -20,6 +21,16 @@ public class Inventory {
 
     @Column(name = "flash_sale_stock")
     private Integer flashSaleStock;
+
+    @Column(name = "flash_sale_starts_at")
+    private Instant flashSaleStartsAt;
+
+    @Column(name = "flash_sale_ends_at")
+    private Instant flashSaleEndsAt;
+
+    @Column(name = "flash_sale_price")
+    private BigDecimal flashSalePrice;
+
 
     @Column(name = "updated_at", nullable = false)
     private Instant updatedAt;
@@ -47,6 +58,31 @@ public class Inventory {
     public Integer getFlashSaleStock() {
         return flashSaleStock;
     }
+
+    public Instant getFlashSaleStartsAt() {
+        return flashSaleStartsAt;
+    }
+
+    public void setFlashSaleStartsAt(Instant flashSaleStartsAt) {
+        this.flashSaleStartsAt = flashSaleStartsAt;
+    }
+
+    public Instant getFlashSaleEndsAt() {
+        return flashSaleEndsAt;
+    }
+
+    public void setFlashSaleEndsAt(Instant flashSaleEndsAt) {
+        this.flashSaleEndsAt = flashSaleEndsAt;
+    }
+
+    public BigDecimal getFlashSalePrice() {
+        return flashSalePrice;
+    }
+
+    public void setFlashSalePrice(BigDecimal flashSalePrice) {
+        this.flashSalePrice = flashSalePrice;
+    }
+
 
     public void decrementAvailable(int qty) {
         if (qty > availableStock) {

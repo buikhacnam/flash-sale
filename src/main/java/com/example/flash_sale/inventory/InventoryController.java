@@ -1,10 +1,7 @@
 package com.example.flash_sale.inventory;
 
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import jakarta.validation.Valid;
+import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
@@ -21,6 +18,11 @@ public class InventoryController {
     @GetMapping("/{productId}")
     public InventoryView get(@PathVariable Long productId) {
         return inventoryService.getView(productId);
+    }
+
+    @PutMapping("/{productId}")
+    public InventoryView update(@PathVariable Long productId, @Valid @RequestBody InventoryFlashSaleConfigRequest inventoryFlashSaleConfigRequest) {
+        return inventoryService.updateFlashSaleConfigs(productId, inventoryFlashSaleConfigRequest);
     }
 
     @PostMapping("/flash-sale/load/{productId}")

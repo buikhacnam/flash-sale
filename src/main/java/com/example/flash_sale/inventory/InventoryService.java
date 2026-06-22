@@ -8,6 +8,8 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Duration;
+import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
@@ -23,13 +25,7 @@ public class InventoryService {
     private final long reservationTtlSeconds;
     private final long reservationHashRetentionSeconds;
 
-    public InventoryService(InventoryRepository inventoryRepository,
-                            StringRedisTemplate redis,
-                            RedisScript<Long> reserveStockScript,
-                            RedisScript<Long> releaseStockScript,
-                            RedisScript<Long> commitReservationScript,
-                            @Value("${flashsale.reservation.ttl-seconds}") long reservationTtlSeconds,
-                            @Value("${flashsale.reservation.hash-retention-seconds}") long reservationHashRetentionSeconds) {
+    public InventoryService(InventoryRepository inventoryRepository, StringRedisTemplate redis, RedisScript<Long> reserveStockScript, RedisScript<Long> releaseStockScript, RedisScript<Long> commitReservationScript, @Value("${flashsale.reservation.ttl-seconds}") long reservationTtlSeconds, @Value("${flashsale.reservation.hash-retention-seconds}") long reservationHashRetentionSeconds) {
         this.inventoryRepository = inventoryRepository;
         this.redis = redis;
         this.reserveScript = reserveStockScript;
@@ -39,26 +35,68 @@ public class InventoryService {
         this.reservationHashRetentionSeconds = reservationHashRetentionSeconds;
     }
 
+    public static String stockKey(Long productId) {
+        return "flashsale:stock:" + productId;
+    }
+
+    public static String reservationKey(UUID reservationId) {
+        return "flashsale:reservation:" + reservationId;
+    }
+
+    public static String expiryZsetKey() {
+        return "flashsale:reservations:expiry";
+    }
+
     @Transactional(readOnly = true)
     public InventoryView getView(Long productId) {
-        Inventory inv = inventoryRepository.findByProductId(productId)
-                .orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND,
-                        "Inventory not found", Map.of("productId", productId)));
+        Inventory inv = inventoryRepository.findByProductId(productId).orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", productId)));
         Integer remaining = readFlashSaleRemaining(productId);
-        return new InventoryView(productId, inv.getAvailableStock(), inv.getFlashSaleStock(), remaining);
+        return InventoryView.from(inv);
+    }
+
+    @Transactional
+    public InventoryView updateFlashSaleConfigs(Long productId, InventoryFlashSaleConfigRequest inventoryFlashSaleConfigRequest) {
+        // update columns related to flash sale (flash_sale_starts_at, flash_sale_ends_at, flash_sale_price)
+        Inventory inv = inventoryRepository.findByProductId(productId).orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", productId)));
+        // should this allow to be updated during the flash sale is going on?
+        //allow for now
+        inv.setFlashSalePrice(inventoryFlashSaleConfigRequest.flashSalePrice());
+        inv.setFlashSaleStartsAt(inventoryFlashSaleConfigRequest.flashSaleStartsAt());
+        inv.setFlashSaleEndsAt(inventoryFlashSaleConfigRequest.flashSaleEndsAt());
+
+        //set TTL for stockKey(productId) if it existed.
+        if (hasFlashSaleStockKey(productId)) {
+            Duration ttl = Duration.between(Instant.now(), inv.getFlashSaleEndsAt());
+            redis.expire(stockKey(productId), ttl); //would delete key when time is in the past
+        }
+
+        return InventoryView.from(inventoryRepository.save(inv));
     }
 
     @Transactional
     public int loadFlashSaleStock(Long productId) {
-        Inventory inv = inventoryRepository.findByProductId(productId)
-                .orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND,
-                        "Inventory not found", Map.of("productId", productId)));
+        Inventory inv = inventoryRepository.findByProductId(productId).orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", productId)));
         Integer configured = inv.getFlashSaleStock();
         if (configured == null) {
-            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED,
-                    "Product is not configured for flash sale", Map.of("productId", productId));
+            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED, "Product is not configured for flash sale", Map.of("productId", productId));
         }
-        redis.opsForValue().set(stockKey(productId), Integer.toString(configured));
+
+        //check if the time window has set
+        if(inv.getFlashSaleEndsAt() == null || inv.getFlashSaleStartsAt() == null) {
+            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED, "Product is not configured time window for flash sale", Map.of("productId", productId));
+        }
+
+        //check if the flash-sale time is in the correct window
+        if (!isInFlashSale(inv)) {
+            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED, "Flash sale window time is not correct", Map.of("productId", productId));
+        }
+
+        Duration ttl = Duration.between(Instant.now(), inv.getFlashSaleEndsAt());
+        if (ttl.isZero() || ttl.isNegative()) {
+            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED, "Flash sale already ended", Map.of("productId", productId));
+        }
+
+        redis.opsForValue().set(stockKey(productId), Integer.toString(configured), ttl);
         return configured;
     }
 
@@ -80,42 +118,32 @@ public class InventoryService {
         UUID reservationId = UUID.randomUUID();
         long expiresAtMs = System.currentTimeMillis() + reservationTtlSeconds * 1000L;
         long hashTtlSeconds = reservationTtlSeconds + reservationHashRetentionSeconds;
-        Long result = redis.execute(reserveScript,
-                List.of(stockKey(productId), reservationKey(reservationId), expiryZsetKey()),
-                Integer.toString(quantity),
-                reservationId.toString(),
-                Long.toString(userId),
-                Long.toString(productId),
-                Long.toString(hashTtlSeconds),
-                Long.toString(expiresAtMs));
+        Long result = redis.execute(reserveScript, List.of(stockKey(productId), reservationKey(reservationId), expiryZsetKey()), Integer.toString(quantity), reservationId.toString(), Long.toString(userId), Long.toString(productId), Long.toString(hashTtlSeconds), Long.toString(expiresAtMs));
         if (result == null) {
             throw new ApiException(ErrorCode.INTERNAL_ERROR, "Reservation script returned null");
         }
         if (result == -1L) {
-            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED,
-                    "Flash-sale stock not loaded for product", Map.of("productId", productId));
+            throw new ApiException(ErrorCode.FLASH_SALE_NOT_LOADED, "Flash-sale stock not loaded for product", Map.of("productId", productId));
         }
         if (result == 0L) {
-            throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
-                    "Not enough flash-sale stock", Map.of("productId", productId, "quantity", quantity));
+            throw new ApiException(ErrorCode.INSUFFICIENT_STOCK, "Not enough flash-sale stock", Map.of("productId", productId, "quantity", quantity));
         }
         return new Reservation(reservationId, productId, quantity);
     }
 
-    /** Release a Redis flash-sale reservation. Idempotent — safe to call from cancel or expiry sweep. */
+    /**
+     * Release a Redis flash-sale reservation. Idempotent — safe to call from cancel or expiry sweep.
+     */
     public boolean releaseReservation(UUID reservationId, Long productId, int quantity) {
-        Long result = redis.execute(releaseScript,
-                List.of(stockKey(productId), reservationKey(reservationId), expiryZsetKey()),
-                Integer.toString(quantity),
-                reservationId.toString());
+        Long result = redis.execute(releaseScript, List.of(stockKey(productId), reservationKey(reservationId), expiryZsetKey()), Integer.toString(quantity), reservationId.toString());
         return result != null && result == 1L;
     }
 
-    /** Commit a Redis flash-sale reservation: clear keys but do not return stock. */
+    /**
+     * Commit a Redis flash-sale reservation: clear keys but do not return stock.
+     */
     public boolean commitReservation(UUID reservationId) {
-        Long result = redis.execute(commitScript,
-                List.of(reservationKey(reservationId), expiryZsetKey()),
-                reservationId.toString());
+        Long result = redis.execute(commitScript, List.of(reservationKey(reservationId), expiryZsetKey()), reservationId.toString());
         return result != null && result == 1L;
     }
 
@@ -133,15 +161,15 @@ public class InventoryService {
             Inventory inv = byProduct.get(e.getKey());
             int qty = e.getValue();
             if (qty > inv.getAvailableStock()) {
-                throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
-                        "Not enough stock", Map.of("productId", e.getKey(),
-                                "requested", qty, "available", inv.getAvailableStock()));
+                throw new ApiException(ErrorCode.INSUFFICIENT_STOCK, "Not enough stock", Map.of("productId", e.getKey(), "requested", qty, "available", inv.getAvailableStock()));
             }
             inv.decrementAvailable(qty);
         }
     }
 
-    /** Return non-flash-sale stock to PG. Called on order cancel for lines without a Redis reservation. */
+    /**
+     * Return non-flash-sale stock to PG. Called on order cancel for lines without a Redis reservation.
+     */
     @Transactional
     public void restoreNormalStock(Map<Long, Integer> productIdToQty) {
         if (productIdToQty.isEmpty()) {
@@ -166,21 +194,22 @@ public class InventoryService {
             Inventory inv = byProduct.get(e.getKey());
             int qty = e.getValue();
             if (qty > inv.getAvailableStock()) {
-                throw new ApiException(ErrorCode.INSUFFICIENT_STOCK,
-                        "Not enough PG stock at confirm", Map.of("productId", e.getKey(), "requested", qty));
+                throw new ApiException(ErrorCode.INSUFFICIENT_STOCK, "Not enough PG stock at confirm", Map.of("productId", e.getKey(), "requested", qty));
             }
             inv.decrementAvailable(qty);
         }
     }
 
+    public boolean isInFlashSale(Inventory inventory) {
+        return Instant.now().isAfter(inventory.getFlashSaleStartsAt()) && Instant.now().isBefore(inventory.getFlashSaleEndsAt());
+    }
+
     private Map<Long, Inventory> lockRowsByProductIds(java.util.Set<Long> productIds) {
         List<Inventory> rows = inventoryRepository.findByProductIdIn(List.copyOf(productIds));
-        Map<Long, Inventory> byProduct = rows.stream()
-                .collect(java.util.stream.Collectors.toMap(Inventory::getProductId, r -> r));
+        Map<Long, Inventory> byProduct = rows.stream().collect(java.util.stream.Collectors.toMap(Inventory::getProductId, r -> r));
         for (Long id : productIds) {
             if (!byProduct.containsKey(id)) {
-                throw new ApiException(ErrorCode.INVENTORY_NOT_FOUND,
-                        "Inventory not found", Map.of("productId", id));
+                throw new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", id));
             }
         }
         return byProduct;
@@ -189,17 +218,5 @@ public class InventoryService {
     private Integer readFlashSaleRemaining(Long productId) {
         String v = redis.opsForValue().get(stockKey(productId));
         return v == null ? null : Integer.parseInt(v);
-    }
-
-    public static String stockKey(Long productId) {
-        return "flashsale:stock:" + productId;
-    }
-
-    public static String reservationKey(UUID reservationId) {
-        return "flashsale:reservation:" + reservationId;
-    }
-
-    public static String expiryZsetKey() {
-        return "flashsale:reservations:expiry";
     }
 }

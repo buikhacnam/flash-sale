@@ -85,6 +85,7 @@ public class OrderService {
             // gate via PG row lock inside the order-persist tx.
             for (CartItemDto item : cart.items()) {
                 if (inventoryService.hasFlashSaleStockKey(item.productId())) {
+                    //inside this condition means it is still in flash sale time window (as the key would disappear outside the time window)
                     Reservation r = inventoryService.reserveFlashSale(userId, item.productId(), item.quantity());
                     reserved.add(r);
                 }
