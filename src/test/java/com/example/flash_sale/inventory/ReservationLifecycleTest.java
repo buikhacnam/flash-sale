@@ -1,6 +1,8 @@
 package com.example.flash_sale.inventory;
 
 import com.example.flash_sale.TestcontainersConfiguration;
+import com.example.flash_sale.support.FlashSaleTestData;
+import com.example.flash_sale.support.TestCleanupSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -34,12 +37,12 @@ class ReservationLifecycleTest {
 
     @BeforeEach
     void cleanRedis() {
-        redis.delete(InventoryService.stockKey(2L));
-        redis.delete(InventoryService.expiryZsetKey());
+        TestCleanupSupport.clearFlashSaleRedisState(redis, 2L);
     }
 
     @Test
     void release_returns_stock_and_is_idempotent() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 2L, new BigDecimal("89.99"));
         inventoryService.loadFlashSaleStock(2L);
         Reservation r = inventoryService.reserveFlashSale(1L, 2L, 3);
         assertThat(redis.opsForValue().get(InventoryService.stockKey(2L))).isEqualTo("17");
@@ -54,6 +57,7 @@ class ReservationLifecycleTest {
 
     @Test
     void commit_does_not_return_stock() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 2L, new BigDecimal("89.99"));
         inventoryService.loadFlashSaleStock(2L);
         Reservation r = inventoryService.reserveFlashSale(1L, 2L, 4);
         assertThat(redis.opsForValue().get(InventoryService.stockKey(2L))).isEqualTo("16");
@@ -65,6 +69,7 @@ class ReservationLifecycleTest {
 
     @Test
     void sweeper_restores_expired_reservations() throws Exception {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 2L, new BigDecimal("89.99"));
         inventoryService.loadFlashSaleStock(2L);
         Reservation r = inventoryService.reserveFlashSale(1L, 2L, 6);
         assertThat(redis.opsForValue().get(InventoryService.stockKey(2L))).isEqualTo("14");
@@ -83,6 +88,7 @@ class ReservationLifecycleTest {
 
     @Test
     void reservation_hash_ttl_outlives_business_expiry() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 2L, new BigDecimal("89.99"));
         inventoryService.loadFlashSaleStock(2L);
         Reservation r = inventoryService.reserveFlashSale(1L, 2L, 1);
 
@@ -93,6 +99,7 @@ class ReservationLifecycleTest {
 
     @Test
     void sweeper_restores_when_hash_still_present_and_expired() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 2L, new BigDecimal("89.99"));
         inventoryService.loadFlashSaleStock(2L);
         Reservation r = inventoryService.reserveFlashSale(1L, 2L, 2);
         assertThat(redis.opsForValue().get(InventoryService.stockKey(2L))).isEqualTo("18");

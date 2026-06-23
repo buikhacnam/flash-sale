@@ -6,6 +6,8 @@ import com.example.flash_sale.cart.CartService;
 import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
 import com.example.flash_sale.inventory.InventoryService;
+import com.example.flash_sale.support.FlashSaleTestData;
+import com.example.flash_sale.support.TestCleanupSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,7 +15,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.util.Set;
+import java.math.BigDecimal;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -37,14 +39,9 @@ class CheckoutIdempotencyTest {
 
     @BeforeEach
     void clean() {
-        cartService.clear(1L);
-        // Reset flash-sale state for product 1
-        redis.delete(InventoryService.stockKey(1L));
-        redis.delete(InventoryService.expiryZsetKey());
-        Set<String> idemKeys = redis.keys("idem:checkout:*");
-        if (idemKeys != null && !idemKeys.isEmpty()) {
-            redis.delete(idemKeys);
-        }
+        TestCleanupSupport.clearCarts(cartService, 1L);
+        TestCleanupSupport.clearFlashSaleRedisState(redis, 1L);
+        TestCleanupSupport.clearCheckoutIdempotencyKeys(redis);
     }
 
     @Test
@@ -68,6 +65,7 @@ class CheckoutIdempotencyTest {
 
     @Test
     void checkout_with_flash_sale_product_creates_reservation_then_confirm_holds_stock() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 1L, new BigDecimal("99.99"));
         inventoryService.loadFlashSaleStock(1L); // stock 10
         cartService.addItem(1L, new AddItemRequest(1L, 3));
 
@@ -86,6 +84,7 @@ class CheckoutIdempotencyTest {
 
     @Test
     void cancel_releases_flash_sale_stock() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 1L, new BigDecimal("99.99"));
         inventoryService.loadFlashSaleStock(1L); // 10
         cartService.addItem(1L, new AddItemRequest(1L, 4));
 

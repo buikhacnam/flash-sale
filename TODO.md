@@ -69,9 +69,15 @@ The flash-sale path currently differs from the normal path only in *how* stock i
    - Pulls `remainingStock` from Redis (`flashsale:stock:{pid}`), price/window from PG.
    - Lets a frontend render "FLASH SALE — 30% OFF, 4 LEFT" without a second round-trip.
 
-### Decision
+### Status
 
-Defer. #1 + #4 together would be the smallest meaningful slice (real discount + visibility). #2 and #3 are real-system necessities but not needed to demonstrate the value prop. Not blocking for the demo.
+Done for the current slice: solution #1 (discount price) and #2 (time window) are implemented, and flash-sale pricing is now persisted onto the order line snapshot.
+
+### Follow-up
+
+- Add a real user-visible inventory/view payload for flash-sale benefit.
+- `GET /api/inventory/{productId}` should expose `productId`, configured flash-sale stock, Redis-backed remaining stock, flash-sale price, and active window in a shape a frontend can render directly.
+- Optionally fold that same data into `GET /api/products` later if a listing-level marketing surface is needed.
 
 ---
 

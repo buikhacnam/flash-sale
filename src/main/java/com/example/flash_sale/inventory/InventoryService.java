@@ -51,6 +51,8 @@ public class InventoryService {
     public InventoryView getView(Long productId) {
         Inventory inv = inventoryRepository.findByProductId(productId).orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", productId)));
         Integer remaining = readFlashSaleRemaining(productId);
+        // TODO: restore a user-visible inventory response that includes productId, configured flash-sale
+        // stock, and Redis-backed remaining stock instead of the current placeholder mapping.
         return InventoryView.from(inv);
     }
 
