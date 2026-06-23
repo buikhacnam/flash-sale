@@ -2,6 +2,8 @@ package com.example.flash_sale.inventory;
 
 import com.example.flash_sale.TestcontainersConfiguration;
 import com.example.flash_sale.common.error.ApiException;
+import com.example.flash_sale.support.FlashSaleTestData;
+import com.example.flash_sale.support.TestCleanupSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -9,6 +11,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.math.BigDecimal;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -28,12 +31,12 @@ class FlashSaleOversellTest {
 
     @BeforeEach
     void cleanRedis() {
-        redis.delete(InventoryService.stockKey(3L));
-        redis.delete(InventoryService.expiryZsetKey());
+        TestCleanupSupport.clearFlashSaleRedisState(redis, 3L);
     }
 
     @Test
     void concurrent_reservations_do_not_oversell() throws Exception {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 3L, new BigDecimal("79.99"));
         int stock = inventoryService.loadFlashSaleStock(3L); // 5
         assertThat(stock).isEqualTo(5);
 

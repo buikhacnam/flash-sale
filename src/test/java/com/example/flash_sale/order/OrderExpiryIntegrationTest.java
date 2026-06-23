@@ -9,6 +9,8 @@ import com.example.flash_sale.inventory.InventoryRepository;
 import com.example.flash_sale.inventory.InventoryService;
 import com.example.flash_sale.payment.PaymentRepository;
 import com.example.flash_sale.payment.PaymentStatus;
+import com.example.flash_sale.support.FlashSaleTestData;
+import com.example.flash_sale.support.TestCleanupSupport;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -16,8 +18,8 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
+import java.math.BigDecimal;
 import java.time.Instant;
-import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -46,19 +48,14 @@ class OrderExpiryIntegrationTest {
 
     @BeforeEach
     void clean() {
-        for (long userId = 1L; userId <= 5L; userId++) {
-            cartService.clear(userId);
-        }
-        redis.delete(InventoryService.stockKey(1L));
-        redis.delete(InventoryService.expiryZsetKey());
-        Set<String> idemKeys = redis.keys("idem:checkout:*");
-        if (idemKeys != null && !idemKeys.isEmpty()) {
-            redis.delete(idemKeys);
-        }
+        TestCleanupSupport.clearCarts(cartService, 1L, 2L, 3L, 4L, 5L);
+        TestCleanupSupport.clearFlashSaleRedisState(redis, 1L);
+        TestCleanupSupport.clearCheckoutIdempotencyKeys(redis);
     }
 
     @Test
     void confirm_payment_rejects_pending_order_that_is_past_expires_at_for_flash_sale() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 1L, new BigDecimal("99.99"));
         inventoryService.loadFlashSaleStock(1L);
         cartService.addItem(1L, new AddItemRequest(1L, 3));
 

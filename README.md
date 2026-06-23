@@ -57,10 +57,23 @@ Tests (spin up their own containers):
 
 The system uses a numeric `X-User-Id` header in lieu of auth. Demo users 1–5 are seeded.
 
+
+Set flash sale window for product 1 (admin) from now until 15 minutes later
+```bash
+curl -X PUT localhost:8080/api/inventory/1 \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "flashSaleStartsAt": "'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'",
+    "flashSaleEndsAt": "'"$(date -u -v+15M +%Y-%m-%dT%H:%M:%SZ)"'",
+    "flashSalePrice": 99.99
+  }'
+```
+This example uses the current UTC time for the start and 15 minutes later for the end.
+
 Load flash-sale stock for product 1 (admin)
 ```bash
 curl -X POST localhost:8080/api/inventory/flash-sale/load/1
-````
+```
 
 Inspect inventory — PG available + Redis remaining
 ```bash

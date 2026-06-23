@@ -7,13 +7,13 @@ import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
 import com.example.flash_sale.inventory.InventoryRepository;
 import com.example.flash_sale.inventory.InventoryService;
+import com.example.flash_sale.support.TestCleanupSupport;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Import;
 import org.springframework.data.redis.core.StringRedisTemplate;
 
-import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -36,7 +36,7 @@ class NormalStockReservationTest {
 
     @Test
     void checkout_decrements_pg_stock_at_checkout() {
-        cartService.clear(2L);
+        TestCleanupSupport.clearCarts(cartService, 2L);
         cartService.addItem(2L, new AddItemRequest(5L, 7)); // non-flash-sale product
 
         int before = inventoryRepository.findByProductId(5L).orElseThrow().getAvailableStock();
@@ -48,8 +48,8 @@ class NormalStockReservationTest {
 
     @Test
     void confirm_does_not_double_decrement_for_normal_lines() {
-        cartService.clear(3L);
-        clearIdem();
+        TestCleanupSupport.clearCarts(cartService, 3L);
+        TestCleanupSupport.clearCheckoutIdempotencyKeys(redis);
         cartService.addItem(3L, new AddItemRequest(6L, 3));
 
         int before = inventoryRepository.findByProductId(6L).orElseThrow().getAvailableStock();
@@ -61,8 +61,8 @@ class NormalStockReservationTest {
 
     @Test
     void cancel_restores_normal_pg_stock() {
-        cartService.clear(4L);
-        clearIdem();
+        TestCleanupSupport.clearCarts(cartService, 4L);
+        TestCleanupSupport.clearCheckoutIdempotencyKeys(redis);
         cartService.addItem(4L, new AddItemRequest(7L, 4));
 
         int before = inventoryRepository.findByProductId(7L).orElseThrow().getAvailableStock();
@@ -76,19 +76,12 @@ class NormalStockReservationTest {
 
     @Test
     void insufficient_stock_blocks_checkout() {
-        cartService.clear(5L);
-        clearIdem();
+        TestCleanupSupport.clearCarts(cartService, 5L);
+        TestCleanupSupport.clearCheckoutIdempotencyKeys(redis);
         cartService.addItem(5L, new AddItemRequest(8L, 999_999));
 
         assertThatThrownBy(() -> orderService.checkout(5L, UUID.randomUUID().toString()))
                 .isInstanceOf(ApiException.class)
                 .extracting("code").isEqualTo(ErrorCode.INSUFFICIENT_STOCK);
-    }
-
-    private void clearIdem() {
-        Set<String> keys = redis.keys("idem:checkout:*");
-        if (keys != null && !keys.isEmpty()) {
-            redis.delete(keys);
-        }
     }
 }
