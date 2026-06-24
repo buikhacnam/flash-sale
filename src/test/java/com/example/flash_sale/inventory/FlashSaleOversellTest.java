@@ -29,9 +29,14 @@ class FlashSaleOversellTest {
     @Autowired
     StringRedisTemplate redis;
 
+    @Autowired
+    InventoryRepository inventoryRepository;
+
     @BeforeEach
     void cleanRedis() {
         TestCleanupSupport.clearFlashSaleRedisState(redis, 3L);
+        TestCleanupSupport.resetFlashSaleConfig(inventoryRepository, 1L);
+
     }
 
     @Test
@@ -66,5 +71,24 @@ class FlashSaleOversellTest {
         assertThat(succeeded.get()).isEqualTo(5);
         assertThat(failed.get()).isEqualTo(15);
         assertThat(redis.opsForValue().get(InventoryService.stockKey(3L))).isEqualTo("0");
+    }
+
+
+    @Test
+    void get_inventory_view() {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 3L, new BigDecimal("79.99"));
+        int stock = inventoryService.loadFlashSaleStock(3L); // 5
+
+        assertThat(stock).isEqualTo(5);
+        InventoryView inventoryView = inventoryService.getView(3L);
+        assertThat(inventoryView.flashSaleStock()).isEqualTo(5);
+        assertThat(inventoryView.flashSaleStockRemaining()).isEqualTo(5);
+
+        inventoryService.reserveFlashSale(1L, 3L, 1);
+        InventoryView newInventoryView = inventoryService.getView(3L);
+        assertThat(newInventoryView.flashSaleStock()).isEqualTo(5);
+        assertThat(newInventoryView.flashSaleStockRemaining()).isEqualTo(4);
+
+
     }
 }

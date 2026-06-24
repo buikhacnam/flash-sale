@@ -66,17 +66,12 @@ public class InventoryFlashSaleConfigIntegrationTest {
 
     @Test
     void update_endpoint_rejects_missing_flash_sale_fields() throws Exception {
-        mockMvc.perform(put("/api/inventory/1")
-                        .contentType(APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "flashSaleStartsAt": "2026-06-22T10:00:00Z",
-                                  "flashSalePrice": 99.99
-                                }
-                                """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.error.details.fields.flashSaleEndsAt").exists());
+        mockMvc.perform(put("/api/inventory/1").contentType(APPLICATION_JSON).content("""
+                {
+                  "flashSaleStartsAt": "2026-06-22T10:00:00Z",
+                  "flashSalePrice": 99.99
+                }
+                """)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR")).andExpect(jsonPath("$.error.details.fields.flashSaleEndsAt").exists());
     }
 
 }
