@@ -73,7 +73,9 @@ public class InventoryService {
 
         redis.delete(ProductService.cacheKey(productId));
 
-        return InventoryView.from(inventoryRepository.save(inv));
+        Inventory saved = inventoryRepository.save(inv);
+        Integer remaining = readFlashSaleRemaining(productId);
+        return InventoryView.from(saved, remaining);
     }
 
     @Transactional
