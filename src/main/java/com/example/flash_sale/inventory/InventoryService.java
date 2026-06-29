@@ -2,6 +2,7 @@ package com.example.flash_sale.inventory;
 
 import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
+import com.example.flash_sale.product.ProductService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -70,6 +71,8 @@ public class InventoryService {
             redis.expire(stockKey(productId), ttl); //would delete key when time is in the past
         }
 
+        redis.delete(ProductService.cacheKey(productId));
+
         return InventoryView.from(inventoryRepository.save(inv));
     }
 
@@ -97,6 +100,7 @@ public class InventoryService {
         }
 
         redis.opsForValue().set(stockKey(productId), Integer.toString(configured), ttl);
+        redis.delete(ProductService.cacheKey(productId));
         return configured;
     }
 
@@ -201,6 +205,9 @@ public class InventoryService {
     }
 
     public boolean isInFlashSale(Inventory inventory) {
+        if(inventory.getFlashSaleStartsAt() == null || inventory.getFlashSaleEndsAt() == null) {
+            return false;
+        }
         return Instant.now().isAfter(inventory.getFlashSaleStartsAt()) && Instant.now().isBefore(inventory.getFlashSaleEndsAt());
     }
 
