@@ -75,8 +75,8 @@ Done for the current slice: solution #1 (discount price) and #2 (time window) ar
 
 ### Follow-up
 
-- Add a real user-visible inventory/view payload for flash-sale benefit.
-- `GET /api/inventory/{productId}` should expose `productId`, configured flash-sale stock, Redis-backed remaining stock, flash-sale price, and active window in a shape a frontend can render directly.
+- [x] Add a real user-visible inventory/view payload for flash-sale benefit.
+- [x] `GET /api/inventory/{productId}` should return configured flash-sale stock, Redis-backed remaining stock, flash-sale price, and active window in a shape a frontend can render directly.
 - Optionally fold that same data into `GET /api/products` later if a listing-level marketing surface is needed.
 
 ---

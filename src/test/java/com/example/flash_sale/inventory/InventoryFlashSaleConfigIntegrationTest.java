@@ -16,10 +16,12 @@ import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.web.servlet.MockMvc;
 
 import java.math.BigDecimal;
+import java.time.Instant;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.springframework.http.MediaType.APPLICATION_JSON;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
@@ -66,17 +68,36 @@ public class InventoryFlashSaleConfigIntegrationTest {
 
     @Test
     void update_endpoint_rejects_missing_flash_sale_fields() throws Exception {
-        mockMvc.perform(put("/api/inventory/1")
-                        .contentType(APPLICATION_JSON)
-                        .content("""
-                                {
-                                  "flashSaleStartsAt": "2026-06-22T10:00:00Z",
-                                  "flashSalePrice": 99.99
-                                }
-                                """))
-                .andExpect(status().isBadRequest())
-                .andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR"))
-                .andExpect(jsonPath("$.error.details.fields.flashSaleEndsAt").exists());
+        mockMvc.perform(put("/api/inventory/1").contentType(APPLICATION_JSON).content("""
+                {
+                  "flashSaleStartsAt": "2026-06-22T10:00:00Z",
+                  "flashSalePrice": 99.99
+                }
+                """)).andExpect(status().isBadRequest()).andExpect(jsonPath("$.error.code").value("VALIDATION_ERROR")).andExpect(jsonPath("$.error.details.fields.flashSaleEndsAt").exists());
+    }
+
+    @Test
+    void update_endpoint_preserves_redis_backed_remaining_stock_in_response() throws Exception {
+        FlashSaleTestData.configureActiveFlashSale(inventoryService, 1L, new BigDecimal("99.99"));
+        inventoryService.loadFlashSaleStock(1L);
+        inventoryService.reserveFlashSale(7L, 1L, 1);
+
+        Instant now = Instant.now();
+        mockMvc.perform(put("/api/inventory/1").contentType(APPLICATION_JSON).content("""
+                {
+                  "flashSaleStartsAt": "%s",
+                  "flashSaleEndsAt": "%s",
+                  "flashSalePrice": 79.99
+                }
+                """.formatted(now.minusSeconds(30), now.plusSeconds(300))))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flashSaleStock").value(10))
+                .andExpect(jsonPath("$.flashSaleStockRemaining").value(9))
+                .andExpect(jsonPath("$.flashSalePrice").value(79.99));
+
+        mockMvc.perform(get("/api/inventory/1"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.flashSaleStockRemaining").value(9));
     }
 
 }

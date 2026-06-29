@@ -2,6 +2,7 @@ package com.example.flash_sale.inventory;
 
 import com.example.flash_sale.common.error.ApiException;
 import com.example.flash_sale.common.error.ErrorCode;
+import com.example.flash_sale.product.ProductService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
@@ -51,9 +52,7 @@ public class InventoryService {
     public InventoryView getView(Long productId) {
         Inventory inv = inventoryRepository.findByProductId(productId).orElseThrow(() -> new ApiException(ErrorCode.INVENTORY_NOT_FOUND, "Inventory not found", Map.of("productId", productId)));
         Integer remaining = readFlashSaleRemaining(productId);
-        // TODO: restore a user-visible inventory response that includes productId, configured flash-sale
-        // stock, and Redis-backed remaining stock instead of the current placeholder mapping.
-        return InventoryView.from(inv);
+        return InventoryView.from(inv, remaining);
     }
 
     @Transactional
@@ -72,7 +71,11 @@ public class InventoryService {
             redis.expire(stockKey(productId), ttl); //would delete key when time is in the past
         }
 
-        return InventoryView.from(inventoryRepository.save(inv));
+        redis.delete(ProductService.cacheKey(productId));
+
+        Inventory saved = inventoryRepository.save(inv);
+        Integer remaining = readFlashSaleRemaining(productId);
+        return InventoryView.from(saved, remaining);
     }
 
     @Transactional
@@ -99,6 +102,7 @@ public class InventoryService {
         }
 
         redis.opsForValue().set(stockKey(productId), Integer.toString(configured), ttl);
+        redis.delete(ProductService.cacheKey(productId));
         return configured;
     }
 
@@ -203,6 +207,9 @@ public class InventoryService {
     }
 
     public boolean isInFlashSale(Inventory inventory) {
+        if(inventory.getFlashSaleStartsAt() == null || inventory.getFlashSaleEndsAt() == null) {
+            return false;
+        }
         return Instant.now().isAfter(inventory.getFlashSaleStartsAt()) && Instant.now().isBefore(inventory.getFlashSaleEndsAt());
     }
 
